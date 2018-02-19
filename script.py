@@ -1,6 +1,5 @@
 import tkinter as tk
 import subprocess
-import os
 from subprocess import Popen
 from subprocess import PIPE
 from time import sleep
@@ -9,12 +8,13 @@ import re
 
 class Game:
     def __init__(self):
-        # self.suggest = (1, 1)
         self.suggest = None
         # self.moves = [('B', 4, 4), ('W', 16, 16), ('B', 5, 5), ('W', 9, 9)]
         self.moves = []
         args = 'gnugo --mode gtp --boardsize {0}'.format(19)
-        self.gnugo = subprocess.Popen(args.split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, shell=False)
+        self.gnugo = subprocess.Popen(args.split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, shell=False,
+                                      universal_newlines=True)
+        self.turn = 'black'
 
     def update_suggest(self, *suggest):
         self.suggest = suggest
@@ -39,39 +39,27 @@ class Game:
         Use gnugo engine
         """
         # save game to sgf format
-        moves = []
-        for move in self.moves:
-            color, x, y = move
-            x = chr(x + ord('a') - 1)
-            y = chr(y + ord('a') - 1)
-            content = "{}[{}{}]".format(color, x, y)
-            moves.append(content)
-        moves = ";".join(moves)
-        template = "(;GM[1]FF[4]CA[UTF-8]AP[WebGoBoard:0.10.10]ST[0]SZ[19]KM[0]HA[0]PB[Black]PW[White];{})"
-        content = template.format(moves)
-        with open("temp.sgf", "w") as f:
-            f.write(content)
-        # run gnugo engine
-        Popen('gnugo -l temp.sgf -o temp_output.sgf', shell=True, stdout=PIPE).stdout
-        sleep(3)
-        with open("temp_output.sgf", "r") as f:
-            try:
-                content = f.read().replace("\n", "")
-                move = re.match("(.*)W\[(.*)]C\[.*\].*", content).groups()[1]
-                x, y = move
-                x = ord(x) - ord('a') + 1
-                y = ord(y) - ord('a') + 1
+        if self.turn == 'black':
+            self.gnugo.stdin.write('genmove black\n')
+            self.gnugo.stdin.flush()
+            new_move = self.gnugo.stdout.readline().strip().split(" ")[1]
+            self.gnugo.stdout.readline()
+            self.moves.append(('B', new_move))
+            self.turn = 'white'
+        elif self.turn == 'white':
+            self.gnugo.stdin.write('genmove white\n')
+            self.gnugo.stdin.flush()
+            new_move = self.gnugo.stdout.readline().strip().split(" ")[1]
+            self.gnugo.stdout.readline()
+            self.moves.append(('W', new_move))
+            self.turn = 'black'
 
-            except Exception as e:
-                pass
-        print('next move', move, x, y)
-        self.add_move('W', x, y)
-        print('next move')
+        print(0)
 
 
-game = Game()
-game.init_moves([('B', 4, 4), ('W', 16, 16), ('B', 3, 5)])
-# game.next_move()
+# game = Game()
+# game.init_moves([('B', 4, 4), ('W', 16, 16), ('B', 3, 5)])
+# # game.next_move()
 
 
 class Application(tk.Frame):
@@ -83,7 +71,29 @@ class Application(tk.Frame):
         self.n = 19 * self.base
         self.game = Game()
         self.create_widgets()
-        self.draw_board()
+
+    def create_widgets(self):
+        base = self.base
+        n = self.n
+        canvas = tk.Canvas(self, height=n + base * 2, width=n + base * 2, background='yellow')
+        canvas.place(x=1, y=1)
+        canvas.bind('<Motion>', self.motion)
+        canvas.bind('<Button-1>', self.click)
+        canvas.pack()
+        self.canvas = canvas
+
+        self.auto_button = tk.Button(self, text="auto", command=self.auto, )
+        self.auto_button.pack(side="bottom")
+        self.quit = tk.Button(self, text="QUIT", fg="red", command=root.destroy)
+        self.quit.pack(side="bottom")
+
+    def gen_move(self, i):
+        if i < 200:
+            self.game.next_move()
+            self.after_idle(self.gen_move, i + 1)
+
+    def auto(self):
+        self.gen_move(0)
 
     def get_position(self, event):
         ex, ey = event.x, event.y
@@ -104,14 +114,19 @@ class Application(tk.Frame):
         if self.get_position(event):
             x, y = self.get_position(event)
             self.game.update_suggest(x, y)
-            self.draw_board()
 
     def draw_board(self):
+        print('draw')
         base = self.base
         n = self.n
         canvas = self.canvas
         game = self.game
         canvas.delete("all")
+        texts = "ABCDEFGHJKLMNOPQRST"
+        print(game.moves)
+        for i in range(19):
+            canvas.create_text(25 * (i + 1), 10, text=texts[i])
+            canvas.create_text(10, 25 * (19 - i), text=str(i + 1))
         for i in [4, 10, 16]:
             for j in [4, 10, 16]:
                 self.draw_special_point(i, j)
@@ -125,12 +140,16 @@ class Application(tk.Frame):
             canvas.create_oval(base * x - size, base * y - size, base * x + size, base * y + size)
 
         for move in game.moves:
-            color, x, y = move
+            color, position = move
+            y, x = position[0], position[1:]
+            y = 19 - texts.find(y)
+            x = int(x)
             colors = {'B': 'black', 'W': 'white'}
             color = colors[color]
             move_size = 10
             canvas.create_oval(base * x - move_size, base * y - move_size, base * x + move_size, base * y + move_size,
                                fill=color)
+        self.canvas.after(50, self.draw_board)
 
     def draw_special_point(self, x, y):
         size = 3
@@ -147,33 +166,11 @@ class Application(tk.Frame):
         if self.get_position(event):
             x, y = self.get_position(event)
             self.game.add_move('B', x, y)
-            self.draw_board()
             self.game.next_move()
-            self.draw_board()
 
-    def create_widgets(self):
-        base = self.base
-        n = self.n
-        canvas = tk.Canvas(self, height=n + base * 2, width=n + base * 2)
-        canvas.place(x=1, y=1)
-        canvas.bind('<Motion>', self.motion)
-        canvas.bind('<Button-1>', self.click)
-        canvas.pack()
-        self.canvas = canvas
-        self.draw_board()
 
-        self.hi_there = tk.Button(self)
-        self.hi_there["text"] = "Cờ vây"
-        self.hi_there["command"] = self.say_hi
-        self.hi_there.pack(side="top")
-
-        self.quit = tk.Button(self, text="QUIT", fg="red",
-                              command=root.destroy)
-        self.quit.pack(side="bottom")
-
-    def say_hi(self):
-        print("cờ vây")
-
-# root = tk.Tk()
-# app = Application(master=root)
-# app.mainloop()
+root = tk.Tk()
+root.title("Go Game")
+app = Application(master=root)
+app.draw_board()
+app.mainloop()
